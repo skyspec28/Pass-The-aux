@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: passtheaux
+      POSTGRES_PASSWORD: passtheaux
+      POSTGRES_DB: passtheaux
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U passtheaux"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      DATABASE_URL: postgresql+asyncpg://passtheaux:passtheaux@postgres:5432/passtheaux
+      REDIS_URL: redis://redis:6379
+      SECRET_KEY: dev-secret-change-in-prod
+    ports:
+      - "8080:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/code
+    working_dir: /code
+
+  worker:
+    build: .
+    command: arq app.workers.settings.WorkerSettings
+    environment:
+      DATABASE_URL: postgresql+asyncpg://passtheaux:passtheaux@postgres:5432/passtheaux
+      REDIS_URL: redis://redis:6379
+      SECRET_KEY: dev-secret-change-in-prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/code
+    working_dir: /code
+
+volumes:
+  pgdata:
