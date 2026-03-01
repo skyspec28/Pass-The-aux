@@ -5,6 +5,7 @@ import structlog
 from arq import create_pool
 from arq.connections import RedisSettings
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis
 
 from app.config import settings
@@ -53,6 +54,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="PassTheAux", version="0.1.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 add_middleware(app)
 
