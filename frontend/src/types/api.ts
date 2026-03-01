@@ -112,3 +112,9 @@ export type WsEvent =
   | { type: "member.joined"; data: { member_id: string; display_name: string } }
   | { type: "member.banned"; data: { member_id: string } }
   | { type: "session.updated"; data: { settings: SessionSettings } }
+
+export interface PlaylistImportResult {
+  added: number
+  skipped: number
+  errors: number
+}

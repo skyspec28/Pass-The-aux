@@ -10,12 +10,13 @@ from app.database import get_db
 from app.dependencies import get_arq, get_redis, require_host_or_mod, require_member_in_session
 from app.models.session import Session, SessionMember
 from app.models.track import SessionTrack, Track
-from app.schemas.track import SessionTrackOut, TrackAddRequest
+from app.providers.spotify import fetch_spotify_playlist_tracks
+from app.schemas.track import PlaylistImportRequest, PlaylistImportResult, SessionTrackOut, TrackAddRequest
 from app.services.broadcast import manager
 from app.services.events import audit
 from app.services.queue import QueueEntry, rank_queue
 from app.services.ratelimit import check_rate_limit
-from app.services.url_parser import parse_track_url
+from app.services.url_parser import parse_playlist_url, parse_track_url
 
 router = APIRouter(tags=["tracks"])
 logger = structlog.get_logger()
@@ -204,3 +205,105 @@ async def remove_track(
     await manager.broadcast(session.id, "track.removed", {"session_track_id": session_track_id})
     queue_snapshot = await build_queue_snapshot(db, session.id)
     await manager.broadcast(session.id, "queue.updated", {"queue": queue_snapshot})
+
+
+@router.post(
+    "/sessions/{code}/import",
+    response_model=PlaylistImportResult,
+)
+async def import_playlist(
+    code: str,
+    body: PlaylistImportRequest,
+    pair: Annotated[tuple[SessionMember, Session], Depends(require_host_or_mod)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis=Depends(get_redis),
+    arq=Depends(get_arq),
+):
+    from app.config import settings as app_settings
+
+    member, session = pair
+    sess_settings = session.settings or {}
+
+    parsed = parse_playlist_url(body.url)
+    if not parsed:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unrecognized playlist URL")
+
+    provider, playlist_id = parsed
+
+    if provider == "SPOTIFY":
+        if not app_settings.SPOTIFY_CLIENT_ID or not app_settings.SPOTIFY_CLIENT_SECRET:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Spotify credentials not configured on this server",
+            )
+        try:
+            track_ids = await fetch_spotify_playlist_tracks(
+                playlist_id,
+                app_settings.SPOTIFY_CLIENT_ID,
+                app_settings.SPOTIFY_CLIENT_SECRET,
+            )
+        except Exception as e:
+            logger.warning("import.spotify_fetch_failed", error=str(e), playlist_id=playlist_id)
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to fetch playlist from Spotify")
+    else:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Only Spotify playlists are supported")
+
+    added = skipped = errors = 0
+    dedupe = sess_settings.get("dedupe_tracks", True)
+
+    for spotify_track_id in track_ids:
+        try:
+            existing_track_result = await db.execute(
+                select(Track).where(Track.provider == "SPOTIFY", Track.provider_track_id == spotify_track_id)
+            )
+            track = existing_track_result.scalar_one_or_none()
+            if track is None:
+                track = Track(
+                    provider="SPOTIFY",
+                    provider_track_id=spotify_track_id,
+                    source_url=f"https://open.spotify.com/track/{spotify_track_id}",
+                )
+                db.add(track)
+                await db.flush()
+
+            if dedupe:
+                dup_result = await db.execute(
+                    select(SessionTrack).where(
+                        SessionTrack.session_id == session.id,
+                        SessionTrack.track_id == track.id,
+                        SessionTrack.status != "REMOVED",
+                    )
+                )
+                if dup_result.scalar_one_or_none() is not None:
+                    skipped += 1
+                    continue
+
+            session_track = SessionTrack(
+                session_id=session.id,
+                track_id=track.id,
+                added_by_member_id=member.id,
+            )
+            db.add(session_track)
+            await db.flush()
+
+            try:
+                await arq.enqueue_job("resolve_track_metadata", str(session_track.id))
+            except Exception as e:
+                logger.warning("arq.enqueue_failed", error=str(e), session_track_id=str(session_track.id))
+
+            await manager.broadcast(
+                session.id, "track.added", {"session_track_id": str(session_track.id), "track_id": str(track.id)}
+            )
+            added += 1
+
+        except Exception as e:
+            logger.warning("import.track_failed", error=str(e), spotify_track_id=spotify_track_id)
+            errors += 1
+
+    await db.commit()
+
+    queue_snapshot = await build_queue_snapshot(db, session.id)
+    await manager.broadcast(session.id, "queue.updated", {"queue": queue_snapshot})
+
+    logger.info("import.done", added=added, skipped=skipped, errors=errors, playlist_id=playlist_id)
+    return PlaylistImportResult(added=added, skipped=skipped, errors=errors)

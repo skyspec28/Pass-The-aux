@@ -34,3 +34,21 @@ def parse_track_url(url: str) -> tuple[str, str] | None:
             return "APPLE", track_id
 
     return None
+
+
+def parse_playlist_url(url: str) -> tuple[str, str] | None:
+    """
+    Parse a music provider playlist URL and return (provider, playlist_id).
+    Currently supports Spotify playlists.
+    Returns None if the URL is not a recognized playlist URL.
+    """
+    parsed = urlparse(url)
+    hostname = parsed.hostname or ""
+
+    # Spotify: https://open.spotify.com/playlist/{id}
+    if "spotify.com" in hostname:
+        parts = [p for p in parsed.path.split("/") if p]
+        if len(parts) >= 2 and parts[0] == "playlist":
+            return "SPOTIFY", parts[1].split("?")[0]
+
+    return None

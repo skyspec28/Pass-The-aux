@@ -13,6 +13,16 @@ class TrackAddRequest(BaseModel):
     url: str | None = None
 
 
+class PlaylistImportRequest(BaseModel):
+    url: str
+
+
+class PlaylistImportResult(BaseModel):
+    added: int
+    skipped: int
+    errors: int
+
+
 class TrackOut(BaseModel):
     id: uuid.UUID
     provider: str

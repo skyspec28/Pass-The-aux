@@ -7,6 +7,7 @@ import type {
   PlaybackOut,
   MemberOut,
   SessionSettings,
+  PlaylistImportResult,
 } from "@/types/api"
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/v1"
@@ -154,5 +155,14 @@ export const muteMember = (
   apiFetch<MemberOut>(`/sessions/${code}/members/${memberId}/mute`, {
     method: "POST",
     body: JSON.stringify({ seconds }),
+    token,
+  })
+
+// ─── Playlist Import ──────────────────────────────────────────────────────────
+
+export const importPlaylist = (code: string, url: string, token: string) =>
+  apiFetch<PlaylistImportResult>(`/sessions/${code}/import`, {
+    method: "POST",
+    body: JSON.stringify({ url }),
     token,
   })
