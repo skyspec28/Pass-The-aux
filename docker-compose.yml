@@ -7,6 +7,7 @@ services:
       POSTGRES_DB: passtheaux
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U passtheaux"]
       interval: 5s
@@ -26,6 +27,7 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     environment:
       DATABASE_URL: postgresql+asyncpg://passtheaux:passtheaux@postgres:5432/passtheaux
+      TEST_DATABASE_URL: postgresql+asyncpg://passtheaux:passtheaux@postgres:5432/passtheaux_test
       REDIS_URL: redis://redis:6379
       SECRET_KEY: dev-secret-change-in-prod
     ports:
